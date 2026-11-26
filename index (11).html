@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pareggia sequenze</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=Barlow:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: practical stage tool, calm and exact
+   IDEA: the meter bridge of a mixing console, one strip per song
+   PICTURE: horizontal LUFS meters with a target line and a big correction readout
+   COLOUR and TYPE: console charcoal / warm panel grey, aqua LED accent, red for clip; Barlow Condensed labels like hardware legends
+   LAYOUT: title + drop zone, then the meter bridge, then the three Cubase steps */
+:root{color-scheme:light dark;--bg:light-dark(#e8e5de,#161b1a);--panel:light-dark(#f6f4ef,#202826);--ink:light-dark(#1b201f,#e9ece8);--mute:light-dark(#5d6563,#9aa5a2);--line:light-dark(#cfcac0,#34403d);--led:light-dark(#0b8a74,#3fd6b4);--track:light-dark(#dcd8cf,#2b3532);--red:light-dark(#c8352b,#ff6a5c);--up:light-dark(#1f6fb8,#7ab8ff)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Barlow,system-ui,sans-serif;overflow-x:clip}
+.band{padding:clamp(24px,4vw,56px) max(5vw,16px);max-width:1240px;margin:0 auto}
+h1,h2,.lab{font-family:"Barlow Condensed",Barlow,sans-serif}
+h1{font-size:clamp(32px,5vw,48px);line-height:1.05;margin:0 0 8px;text-wrap:balance}
+h2{font-size:26px;margin:0 0 12px}
+p{max-width:68ch;margin:0 0 12px}
+.lead{color:var(--mute);font-size:17px}
+.top{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:28px;align-items:start}
+@media(max-width:760px){.top{grid-template-columns:minmax(0,1fr)}}
+.drop{border:2px dashed var(--line);border-radius:14px;background:var(--panel);padding:26px;text-align:center;cursor:pointer;transition:border-color .2s}
+.drop.over,.drop:focus-within{border-color:var(--led)}
+.drop b{font-family:"Barlow Condensed";font-size:24px;display:block}
+.drop input{position:absolute;opacity:0;width:1px;height:1px}
+.btn{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:10px;border:0;background:var(--led);color:light-dark(#fff,#0c1412);font:600 16px Barlow;cursor:pointer;margin-top:12px}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--up);outline-offset:2px}
+.set{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:18px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--mute)}
+select,input[type=number],textarea{font:16px Barlow;min-height:44px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+textarea{min-height:64px;resize:vertical}
+.status{margin-top:12px;min-height:24px;font-weight:600}
+.status.err{color:var(--red)}
+.bridge{background:var(--panel);border-radius:16px;padding:18px clamp(14px,2.5vw,26px);border:1px solid var(--line)}
+.bh{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 20px;align-items:baseline;margin-bottom:6px}
+.tag{font-size:13px;color:var(--mute)}
+.strip{display:grid;grid-template-columns:2.2em minmax(0,1fr) 8.5em;gap:14px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.num{font:700 22px "Barlow Condensed";color:var(--mute);text-align:right}
+.meta{font-size:13px;color:var(--mute);display:flex;flex-wrap:wrap;gap:4px 14px;margin-bottom:6px}
+.meta span{white-space:nowrap}
+.meter{position:relative;height:14px;border-radius:7px;background:var(--track)}
+.meter i{position:absolute;inset:0 auto 0 0;border-radius:7px;background:var(--led);opacity:.55}
+.meter em{position:absolute;top:-5px;bottom:-5px;width:3px;margin-left:-1.5px;background:var(--ink);border-radius:2px}
+.corr{font:700 clamp(26px,3vw,34px)/1 "Barlow Condensed";text-align:right;white-space:nowrap}
+.corr small{display:block;font:400 12px Barlow;color:var(--mute);margin-top:4px}
+.corr.dn{color:var(--led)}.corr.upc{color:var(--up)}.corr.clip{color:var(--red)}
+@media(max-width:520px){.strip{grid-template-columns:1.6em minmax(0,1fr) 6.2em;gap:10px}}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;counter-reset:s;padding:0;list-style:none}
+.steps li{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+.steps li::before{counter-increment:s;content:counter(s);font:700 30px "Barlow Condensed";color:var(--led);display:block;line-height:1}
+.empty{color:var(--mute);padding:20px 0}
+@media(prefers-reduced-motion:no-preference){.meter i{transition:width .5s ease}}
+</style>
+</head>
+<body>
+<section class="band top">
+  <div>
+    <h1>Pareggia il volume delle sequenze</h1>
+    <p class="lead">Trascina qui l'export del progetto Cubase. Misuro il volume percepito (LUFS) di ogni brano e ti dico di quanti dB alzarlo o abbassarlo. Nessuna compressione: solo volume. Il file resta sul tuo computer, non viene caricato da nessuna parte.</p>
+  </div>
+  <div>
+    <label class="drop" id="drop">
+      <b>Trascina qui il file audio</b>
+      <span class="tag">WAV, MP3, AIFF o FLAC: un unico file con tutta la scaletta</span><br>
+      <span class="btn">Scegli file</span>
+      <input type="file" id="file" accept="audio/*,.wav,.aif,.aiff,.flac,.mp3">
+    </label>
+    <div class="status" id="status" role="status"></div>
+  </div>
+</section>
+
+<section class="band" style="padding-top:0">
+  <div class="bridge">
+    <div class="bh">
+      <h2 id="btitle">Correzioni per brano</h2>
+      <span class="tag" id="tinfo"></span>
+    </div>
+    <div id="strips"></div>
+    <div class="set">
+      <label class="f">Livello di arrivo
+        <select id="mode">
+          <option value="auto">Automatico (più alto possibile senza clip)</option>
+          <option value="neg">Solo abbassare i brani forti</option>
+          <option value="fix">Valore fisso</option>
+        </select>
+      </label>
+      <label class="f" id="fixwrap" hidden>LUFS di arrivo
+        <input type="number" id="fix" value="-16" step="0.5">
+      </label>
+      <label class="f">Silenzio minimo tra brani (secondi)
+        <input type="number" id="sil" value="2" min="0.5" step="0.5">
+      </label>
+      <label class="f">Inizi dei brani a mano (facoltativo)
+        <textarea id="tempi" placeholder="es. 0:00 3:45 7:58 12:10"></textarea>
+      </label>
+    </div>
+    <button class="btn ghost" id="copy" type="button">Copia tabella</button>
+    <span class="tag" id="copied"></span>
+  </div>
+</section>
+
+<section class="band">
+  <h2>Come applicare le correzioni in Cubase</h2>
+  <ol class="steps">
+    <li><b>Esporta la scaletta.</b> Locatori su tutto il progetto, poi File &gt; Esporta &gt; Mixdown audio. Va bene anche MP3: il file è più leggero e la misura praticamente identica.</li>
+    <li><b>Trascinalo qui sopra.</b> I brani vengono trovati dalle pause di silenzio. Se due brani sono attaccati, scrivi gli inizi a mano copiandoli dai marker.</li>
+    <li><b>Automazione su Stereo Out.</b> Apri l'automazione del volume dell'uscita stereo e, per ogni brano, disegna una linea piatta al valore indicato (il fader parte da 0 dB). Salva il progetto: è fatto una volta per tutte.</li>
+  </ol>
+  <p class="tag">La misura segue lo standard EBU R128 (loudness integrata con gating). Il valore "senza clip" considera il picco dei campioni con un margine di 1 dB.</p>
+</section>
+
+<script>
+{
+const $ = id => document.getElementById(id);
+const CEIL = -1, HOP_S = 0.1, THR_DB = -55;
+let data = null; // {ms:[Float64Array per canale], pk:Float32Array, n, name}
+let rows = [];
+
+const demo = [
+  {s:0,e:221,l:-11.8,p:-0.4},{s:226,e:478,l:-15.9,p:-3.1},{s:483,e:702,l:-13.2,p:-1.2},
+  {s:707,e:958,l:-18.4,p:-6.0},{s:963,e:1190,l:-12.6,p:-0.8},{s:1195,e:1431,l:-14.7,p:-2.5}
+];
+
+const mmss = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const esc = t => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function biquad(rate, type, G, Q, fc) {
+  const A = 10 ** (G / 40), w = 2 * Math.PI * fc / rate, cs = Math.cos(w), al = Math.sin(w) / (2 * Q), sA = Math.sqrt(A);
+  let b, a;
+  if (type === 'shelf') {
+    b = [A*((A+1)+(A-1)*cs+2*sA*al), -2*A*((A-1)+(A+1)*cs), A*((A+1)+(A-1)*cs-2*sA*al)];
+    a = [(A+1)-(A-1)*cs+2*sA*al, 2*((A-1)-(A+1)*cs), (A+1)-(A-1)*cs-2*sA*al];
+  } else {
+    b = [(1+cs)/2, -(1+cs), (1+cs)/2];
+    a = [1+al, -2*cs, 1-al];
+  }
+  return {b0:b[0]/a[0], b1:b[1]/a[0], b2:b[2]/a[0], a1:a[1]/a[0], a2:a[2]/a[0]};
+}
+
+function analyse(buf) {
+  const rate = buf.sampleRate, hop = Math.round(rate * HOP_S), n = Math.floor(buf.length / hop);
+  const f1 = biquad(rate, 'shelf', 4, 1 / Math.SQRT2, 1500), f2 = biquad(rate, 'hp', 0, 0.5, 38);
+  const chans = Math.min(buf.numberOfChannels, 2), ms = [], pk = new Float32Array(n);
+  for (let c = 0; c < chans; c++) {
+    const x = buf.getChannelData(c), out = new Float64Array(n);
+    let x1=0,x2=0,y1=0,y2=0,z1=0,z2=0;
+    for (let b = 0; b < n; b++) {
+      let sum = 0, mx = pk[b];
+      for (let i = b * hop, e = i + hop; i < e; i++) {
+        const v = x[i], av = v < 0 ? -v : v;
+        if (av > mx) mx = av;
+        const y = f1.b0*v + f1.b1*x1 + f1.b2*x2 - f1.a1*y1 - f1.a2*y2;
+        x2 = x1; x1 = v;
+        const z = f2.b0*y + f2.b1*y1 + f2.b2*y2 - f2.a1*z1 - f2.a2*z2;
+        y2 = y1; y1 = y; z2 = z1; z1 = z;
+        sum += z * z;
+      }
+      out[b] = sum / hop; pk[b] = mx;
+    }
+    ms.push(out);
+  }
+  return {ms, pk, n};
+}
+
+// Loudness integrata EBU R128 sui sottoblocchi [b0, b1)
+function lufs(ms, b0, b1) {
+  const L = [];
+  for (let j = b0; j + 4 <= b1; j++) {
+    let z = 0;
+    for (const ch of ms) z += (ch[j] + ch[j+1] + ch[j+2] + ch[j+3]) / 4;
+    L.push(z);
+  }
+  const lk = z => -0.691 + 10 * Math.log10(z);
+  const g1 = L.filter(z => lk(z) > -70);
+  if (!g1.length) return -Infinity;
+  const rel = lk(g1.reduce((a, b) => a + b, 0) / g1.length) - 10;
+  const g2 = g1.filter(z => lk(z) > rel);
+  return lk(g2.reduce((a, b) => a + b, 0) / g2.length);
+}
+
+function segments() {
+  const {pk, n} = data, txt = $('tempi').value.trim();
+  if (txt) {
+    const st = txt.split(/[\s,;]+/).map(t => {
+      const p = t.split(/[:.]/).map(Number);
+      return p.length > 1 ? p[0] * 60 + p[1] : p[0];
+    }).filter(v => isFinite(v)).sort((a, b) => a - b).map(s => Math.round(s / HOP_S));
+    return st.map((s, i) => [Math.min(s, n), Math.min(st[i+1] ?? n, n)]);
+  }
+  const minB = Math.max(1, Math.round(+$('sil').value / HOP_S)), thr = 10 ** (THR_DB / 20), out = [];
+  let start = -1, sil = 0;
+  for (let b = 0; b < n; b++) {
+    if (pk[b] > thr) { if (start < 0) start = b; sil = 0; }
+    else if (start >= 0 && ++sil >= minB) { out.push([start, b - sil + 1]); start = -1; sil = 0; }
+  }
+  if (start >= 0) out.push([start, n - sil]);
+  return out;
+}
+
+function measure() {
+  rows = [];
+  for (const [b0, b1] of segments()) {
+    if ((b1 - b0) * HOP_S < 3) continue;
+    let p = 0;
+    for (let b = b0; b < b1; b++) if (data.pk[b] > p) p = data.pk[b];
+    const l = lufs(data.ms, b0, b1);
+    if (isFinite(l)) rows.push({s: b0 * HOP_S, e: b1 * HOP_S, l, p: 20 * Math.log10(p + 1e-12)});
+  }
+  render();
+}
+
+function target(list) {
+  const m = $('mode').value;
+  if (m === 'fix') return +$('fix').value;
+  if (m === 'neg') return Math.min(...list.map(r => r.l));
+  return Math.min(...list.map(r => r.l + CEIL - r.p));
+}
+
+function render() {
+  const list = data ? rows : demo;
+  $('fixwrap').hidden = $('mode').value !== 'fix';
+  $('btitle').textContent = data ? 'Correzioni per brano' : 'Correzioni per brano (esempio)';
+  if (!list.length) {
+    $('strips').innerHTML = '<p class="empty">Nessun brano trovato. Prova ad abbassare il silenzio minimo o a scrivere gli inizi a mano.</p>';
+    $('tinfo').textContent = '';
+    return;
+  }
+  const t = target(list), lo = -30, hi = -4, pos = v => Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100));
+  $('tinfo').textContent = `${data ? esc(data.name) + ' · ' : 'Dati di esempio · '}${list.length} brani · arrivo ${t.toFixed(1)} LUFS`;
+  $('strips').innerHTML = list.map((r, i) => {
+    const g = t - r.l, clip = r.p + g > CEIL + 0.05;
+    const cls = clip ? 'clip' : g < -0.05 ? 'dn' : g > 0.05 ? 'upc' : '';
+    const note = clip ? `picco ${(r.p + g).toFixed(1)} dBFS` : g > 0.05 ? 'alzare' : g < -0.05 ? 'abbassare' : 'già a posto';
+    return `<div class="strip">
+      <div class="num">${i + 1}</div>
+      <div><div class="meta"><span>${mmss(r.s)} – ${mmss(r.e)}</span><span>${r.l.toFixed(1)} LUFS</span><span>picco ${r.p.toFixed(1)} dBFS</span></div>
+      <div class="meter" aria-hidden="true"><i style="width:${pos(r.l)}%"></i><em style="left:${pos(t)}%"></em></div></div>
+      <div class="corr ${cls}">${g > 0 ? '+' : g < 0 ? '−' : ''}${Math.abs(g).toFixed(1)} dB<small>${note}</small></div>
+    </div>`;
+  }).join('');
+}
+
+async function load(file) {
+  const st = $('status');
+  st.className = 'status';
+  st.textContent = `Leggo ${file.name}…`;
+  try {
+    const ab = await file.arrayBuffer();
+    let ctx;
+    try { ctx = new AudioContext({sampleRate: 22050}); } catch { ctx = new AudioContext(); }
+    st.textContent = 'Decodifico l\'audio…';
+    const buf = await ctx.decodeAudioData(ab);
+    ctx.close?.();
+    st.textContent = 'Misuro…';
+    await new Promise(r => setTimeout(r, 30));
+    data = {...analyse(buf), name: file.name};
+    measure();
+    st.textContent = `Fatto: ${mmss(buf.duration)} di audio analizzati.`;
+  } catch (e) {
+    st.className = 'status err';
+    st.textContent = 'Non riesco a leggere questo file. Prova a esportarlo in WAV o MP3.';
+  }
+}
+
+$('file').addEventListener('change', e => e.target.files[0] && load(e.target.files[0]));
+const dz = $('drop');
+['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
+dz.addEventListener('drop', e => e.dataTransfer.files[0] && load(e.dataTransfer.files[0]));
+$('mode').addEventListener('change', render);
+$('fix').addEventListener('input', render);
+$('sil').addEventListener('change', () => data && measure());
+$('tempi').addEventListener('change', () => data && measure());
+
+$('copy').addEventListener('click', async () => {
+  const list = data ? rows : demo, t = target(list);
+  const txt = list.map((r, i) => `${i + 1}\t${mmss(r.s)}-${mmss(r.e)}\t${r.l.toFixed(1)} LUFS\t${(t - r.l > 0 ? '+' : '') + (t - r.l).toFixed(1)} dB`).join('\n');
+  try { await navigator.clipboard.writeText(txt); $('copied').textContent = ' Copiata.'; }
+  catch { $('copied').textContent = ' Copia non riuscita.'; }
+});
+
+render();
+}
+</script>
+</body>
+</html>
