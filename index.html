@@ -108,7 +108,7 @@ textarea{min-height:64px;resize:vertical}
 <section class="band">
   <h2>Come applicare le correzioni in Cubase</h2>
   <ol class="steps">
-    <li><b>Esporta la scaletta.</b> Locatori su tutto il progetto, poi File &gt; Esporta &gt; Mixdown audio. Va bene anche MP3: il file è più leggero e la misura praticamente identica.</li>
+    <li><b>Esporta la scaletta.</b> Locatori su tutto il progetto, poi File &gt; Esporta &gt; Mixdown audio. Meglio in WAV: viene letto a pezzi, quindi va bene anche una scaletta di due ore con decine di brani. MP3 va bene per scalette più corte.</li>
     <li><b>Trascinalo qui sopra.</b> I brani vengono trovati dalle pause di silenzio. Se due brani sono attaccati, scrivi gli inizi a mano copiandoli dai marker.</li>
     <li><b>Automazione su Stereo Out.</b> Apri l'automazione del volume dell'uscita stereo e, per ogni brano, disegna una linea piatta al valore indicato (il fader parte da 0 dB). Salva il progetto: è fatto una volta per tutte.</li>
   </ol>
@@ -143,29 +143,77 @@ function biquad(rate, type, G, Q, fc) {
   return {b0:b[0]/a[0], b1:b[1]/a[0], b2:b[2]/a[0], a1:a[1]/a[0], a2:a[2]/a[0]};
 }
 
-function analyse(buf) {
-  const rate = buf.sampleRate, hop = Math.round(rate * HOP_S), n = Math.floor(buf.length / hop);
+// Analizzatore a flusso: riceve l'audio a pezzi, memoria costante
+function makeAnalyser(rate, chans) {
+  const hop = Math.round(rate * HOP_S);
   const f1 = biquad(rate, 'shelf', 4, 1 / Math.SQRT2, 1500), f2 = biquad(rate, 'hp', 0, 0.5, 38);
-  const chans = Math.min(buf.numberOfChannels, 2), ms = [], pk = new Float32Array(n);
-  for (let c = 0; c < chans; c++) {
-    const x = buf.getChannelData(c), out = new Float64Array(n);
-    let x1=0,x2=0,y1=0,y2=0,z1=0,z2=0;
-    for (let b = 0; b < n; b++) {
-      let sum = 0, mx = pk[b];
-      for (let i = b * hop, e = i + hop; i < e; i++) {
-        const v = x[i], av = v < 0 ? -v : v;
-        if (av > mx) mx = av;
-        const y = f1.b0*v + f1.b1*x1 + f1.b2*x2 - f1.a1*y1 - f1.a2*y2;
-        x2 = x1; x1 = v;
-        const z = f2.b0*y + f2.b1*y1 + f2.b2*y2 - f2.a1*z1 - f2.a2*z2;
-        y2 = y1; y1 = y; z2 = z1; z1 = z;
-        sum += z * z;
+  const st = Array.from({length: chans}, () => ({x1:0,x2:0,y1:0,y2:0,z1:0,z2:0,sum:0,ms:[]}));
+  const pk = []; let cnt = 0, mx = 0;
+  return {
+    push(chData, len) {
+      for (let i = 0; i < len; i++) {
+        for (let c = 0; c < chans; c++) {
+          const s = st[c], v = chData[c][i], av = v < 0 ? -v : v;
+          if (av > mx) mx = av;
+          const y = f1.b0*v + f1.b1*s.x1 + f1.b2*s.x2 - f1.a1*s.y1 - f1.a2*s.y2;
+          s.x2 = s.x1; s.x1 = v;
+          const z = f2.b0*y + f2.b1*s.y1 + f2.b2*s.y2 - f2.a1*s.z1 - f2.a2*s.z2;
+          s.y2 = s.y1; s.y1 = y; s.z2 = s.z1; s.z1 = z;
+          s.sum += z * z;
+        }
+        if (++cnt === hop) {
+          for (const s of st) { s.ms.push(s.sum / hop); s.sum = 0; }
+          pk.push(mx); mx = 0; cnt = 0;
+        }
       }
-      out[b] = sum / hop; pk[b] = mx;
+    },
+    done: () => ({ms: st.map(s => s.ms), pk, n: pk.length})
+  };
+}
+
+// Lettura WAV a pezzi (PCM 16/24/32 bit o float 32)
+async function readWav(file, onProg) {
+  const dv = async (o, l) => new DataView(await file.slice(o, o + l).arrayBuffer());
+  const h = await dv(0, 12), tag = o => String.fromCharCode(h.getUint8(o), h.getUint8(o+1), h.getUint8(o+2), h.getUint8(o+3));
+  if (!['RIFF', 'RF64'].includes(tag(0)) || tag(8) !== 'WAVE') return null;
+  let off = 12, fmt = null, dataOff = 0, dataLen = 0;
+  while (off + 8 <= file.size) {
+    const c = await dv(off, 8), id = String.fromCharCode(...[0,1,2,3].map(i => c.getUint8(i))), sz = c.getUint32(4, true);
+    if (id === 'fmt ') {
+      const f = await dv(off + 8, Math.min(sz, 40));
+      let code = f.getUint16(0, true);
+      if (code === 0xFFFE && sz >= 26) code = f.getUint16(24, true);
+      fmt = {code, ch: f.getUint16(2, true), rate: f.getUint32(4, true), align: f.getUint16(12, true), bits: f.getUint16(14, true)};
+    } else if (id === 'data') {
+      dataOff = off + 8;
+      dataLen = (sz === 0xFFFFFFFF || dataOff + sz > file.size) ? file.size - dataOff : sz;
+      break;
     }
-    ms.push(out);
+    off += 8 + sz + (sz & 1);
   }
-  return {ms, pk, n};
+  if (!fmt || !dataOff || ![1, 3].includes(fmt.code) || ![16, 24, 32].includes(fmt.bits)) return null;
+  const chans = Math.min(fmt.ch, 2), bps = fmt.bits / 8, frames = Math.floor(dataLen / fmt.align);
+  const an = makeAnalyser(fmt.rate, chans), step = fmt.rate * 20;
+  const buf = [0, 1].slice(0, chans).map(() => new Float32Array(step));
+  for (let f0 = 0; f0 < frames; f0 += step) {
+    const nf = Math.min(step, frames - f0), d = await dv(dataOff + f0 * fmt.align, nf * fmt.align);
+    for (let i = 0; i < nf; i++) for (let c = 0; c < chans; c++) {
+      const o = i * fmt.align + c * bps;
+      buf[c][i] = fmt.code === 3 ? d.getFloat32(o, true)
+        : bps === 2 ? d.getInt16(o, true) / 32768
+        : bps === 3 ? ((d.getInt8(o + 2) << 16) | (d.getUint8(o + 1) << 8) | d.getUint8(o)) / 8388608
+        : d.getInt32(o, true) / 2147483648;
+    }
+    an.push(buf, nf);
+    onProg((f0 + nf) / frames);
+  }
+  return {...an.done(), dur: frames / fmt.rate};
+}
+
+function analyseBuffer(buf) {
+  const chans = Math.min(buf.numberOfChannels, 2), an = makeAnalyser(buf.sampleRate, chans);
+  an.push([...Array(chans)].map((_, c) => buf.getChannelData(c)), buf.length);
+  return {...an.done(), dur: buf.duration};
 }
 
 // Loudness integrata EBU R128 sui sottoblocchi [b0, b1)
@@ -251,17 +299,21 @@ async function load(file) {
   st.className = 'status';
   st.textContent = `Leggo ${file.name}…`;
   try {
-    const ab = await file.arrayBuffer();
-    let ctx;
-    try { ctx = new AudioContext({sampleRate: 22050}); } catch { ctx = new AudioContext(); }
-    st.textContent = 'Decodifico l\'audio…';
-    const buf = await ctx.decodeAudioData(ab);
-    ctx.close?.();
-    st.textContent = 'Misuro…';
-    await new Promise(r => setTimeout(r, 30));
-    data = {...analyse(buf), name: file.name};
+    let res = await readWav(file, p => { st.textContent = `Misuro… ${Math.round(p * 100)}%`; });
+    if (!res) {
+      const ab = await file.arrayBuffer();
+      let ctx;
+      try { ctx = new AudioContext({sampleRate: 22050}); } catch { ctx = new AudioContext(); }
+      st.textContent = 'Decodifico l\'audio…';
+      const buf = await ctx.decodeAudioData(ab);
+      ctx.close?.();
+      st.textContent = 'Misuro…';
+      await new Promise(r => setTimeout(r, 30));
+      res = analyseBuffer(buf);
+    }
+    data = {...res, name: file.name};
     measure();
-    st.textContent = `Fatto: ${mmss(buf.duration)} di audio analizzati.`;
+    st.textContent = `Fatto: ${mmss(res.dur)} di audio analizzati, ${rows.length} brani trovati.`;
   } catch (e) {
     st.className = 'status err';
     st.textContent = 'Non riesco a leggere questo file. Prova a esportarlo in WAV o MP3.';
